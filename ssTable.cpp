@@ -6,6 +6,8 @@ using namespace std;
 // sstable生成方式一：从满了或者系统关闭时的memtable转化 或者从合并操作中得来
 SSTable::SSTable(list<pair<uint64_t, string>> &list)
 {
+    level = 0;
+    DATA = NULL;
     uint64_t size = list.size();
     header.minkey = list.front().first;
     header.maxkey = list.back().first;
@@ -29,8 +31,10 @@ SSTable::SSTable(list<pair<uint64_t, string>> &list)
 }
 
 // sstable生成方式二：从data路径中二进制文件读出(mkFile)的逆向操作
-SSTable::SSTable(string &path, int &stamp)
+SSTable::SSTable(string &path, int &stamp,int _level)
 {
+    level = _level;
+    DATA = NULL;
     ifstream file;
     file.open(path, ios::in | ios::binary);
     file.read((char *)&header, 32);
@@ -47,8 +51,15 @@ SSTable::SSTable(string &path, int &stamp)
     file.close();
 }
 
+SSTable::SSTable(){
+    DATA = NULL;
+}
+
 SSTable::~SSTable()
 {
+    if(!DATA)
+        delete DATA;
+    DATA = NULL;
 }
 
 //将sstable类型转换为二进制文件写入
@@ -133,14 +144,15 @@ void SSTable::getscale(Range &scale)
 }
 
 //将ssTable中对应的KV值全部找出并返回vector，用于合并重新划分
-void SSTable::toKV(vector<KV> *tobecompact, int level,int stamp)
+void SSTable::addData()
 {
+    DATA = new list<KV>;
     uint32_t offset = 0;
     uint32_t endoffset = 0;
     uint32_t size = 0;
     vector<Index>::iterator it;
 
-    string path = "./data/level-" + to_string(level) + "/" + to_string(header.timeStamp) + ".sst";
+    string path = "./data/level-" + to_string(level) + "/" + to_string(header.timeStamp)+"-"+to_string(header.kvnumber) + ".sst";
     ifstream file;
     file.open(path, ios::in | ios::binary);
     //依次取出kv对
@@ -152,8 +164,8 @@ void SSTable::toKV(vector<KV> *tobecompact, int level,int stamp)
         size = endoffset - offset;
         char val[size];
         file.read((char *)val, size);
-        KV temp(it->first, val,stamp);
-        tobecompact->push_back(temp);
+        KV temp(it->first, val);
+        DATA->push_back(temp);
     }
     //单独处理最后一个值
     file.seekg(0, ios::end);
@@ -163,8 +175,9 @@ void SSTable::toKV(vector<KV> *tobecompact, int level,int stamp)
 //    string val(size,'\0');
     char val[size];
     file.read((char *)val, size);
-    KV temp(it->first, val,stamp);
-    tobecompact->push_back(temp);
+    KV temp(it->first, val);
+    DATA->push_back(temp);
 
     file.close();
 }
+

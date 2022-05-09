@@ -8,6 +8,7 @@
 using namespace utils;
 int time_stamp; // kvstore类中记录时间的全局变量
 
+
 KVStore::KVStore(const std::string &dir) : KVStoreAPI(dir)
 {
 	maxlevel = 0;
@@ -15,29 +16,32 @@ KVStore::KVStore(const std::string &dir) : KVStoreAPI(dir)
 	int temptime = 0;
 	int latesttime = 0;
 	int curlevel = 0;
-	string dirpath = "./data/level-0";
-	while (dirExists(dirpath)) {
-        string filepath = "";
-        scanDir(dirpath, ret);
+    string dirpath = dir +"/level-0";
+	while (dirExists(dirpath))
+	{
         vector<SSTable> levelbuffer;
-        for (int i = 0; i < ret.size(); i++) {
-            filepath = dirpath + "/" + ret[i];
-            SSTable temp(filepath, temptime);
-            levelbuffer.push_back(temp);
-            if (temptime > latesttime)
-                latesttime = temptime;
-        }
-        buffer.push_back(levelbuffer);
-        vector<SSTable>().swap(levelbuffer);
-        curlevel++;
-        dirpath = "./data/level-" + to_string(curlevel);
+		string filepath = "";
+		scanDir(dirpath, ret);
+		for (int i = 0; i < ret.size(); i++)
+		{
+			filepath = dirpath + "/" + ret[i];
+                SSTable temp(filepath, temptime, curlevel);
+                levelbuffer.push_back(temp);
+                if (temptime > latesttime)
+                    latesttime = temptime;
+		}
+		buffer.push_back(levelbuffer);
+		curlevel++;
+		dirpath = "./data/level-" + to_string(curlevel);
+	}
+	if (buffer.empty()){
+        buffer.emplace_back();
     }
-    vector<SSTable> empty;
-    if(buffer.empty())buffer.push_back(empty);
-    else {
-        time_stamp = latesttime;
-        maxlevel = curlevel - 1;
-    }
+	else
+	{
+		time_stamp = latesttime;
+		maxlevel = curlevel - 1;
+	}
 }
 
 //关闭时的操作都写在memtable.h和各类的reset函数当中了
@@ -60,7 +64,7 @@ void KVStore::put(uint64_t key, const std::string &s)
 		mtable.toSSTable(list);
 		SSTable newSSTable(list);
 		buffer[0].push_back(newSSTable); //存入缓存
-		string sspath = to_string(time_stamp) + ".sst";
+		string sspath = to_string(time_stamp) + "-" + to_string(newSSTable.header.kvnumber) + ".sst";
 		string dirpath = "./data/level-0";
 		newSSTable.mkFile(sspath, dirpath, list);
 		mtable.reset();
@@ -82,84 +86,70 @@ void KVStore::put(uint64_t key, const std::string &s)
 void KVStore::compactLevel(int level)
 {
 	vector<Range> scale;
-    vector<SSTable> table2compact;
-	vector<KV> tobecompact;
+	vector<SSTable> tobecompact;
 	Range tempscale;
 	int size = buffer[level].size();
-	int maxStamp = 0; //记录参与合并的是stable的最大时间戳
+	int maxStamp = 0; //记录参与合并的sstable的最大时间
 
-	//若为第零层，全部放入tobecompact中
-//	if (level == 0)
-//	{
-//		for (int i = 0; i < size; i++)
-//		{
-//			buffer[level][i].getscale(tempscale);
-//			scale.push_back(tempscale);
-//			int tempStamp = buffer[level][i].header.timeStamp;
-//            table2compact.push_back(buffer[level][i]);
-//			buffer[level][i].toKV(&tobecompact, level, tempStamp);
-//			if (tempStamp > maxStamp)
-//				maxStamp = tempStamp;
-//		}
-//		buffer[level].clear();
-//	}
-	//其他层则排序后寻找时间戳最小层与下层合并
-		int num = size - (1 << (level + 1)); //超过的table个数
-        if(level==0)num = size;
-		vector<int> timetable;
-		for (int i = 0; i < size; i++)
-		{
-			timetable.push_back(buffer[level][i].header.timeStamp);
-		}
+	//排序后寻找时间戳最小层与下层合并
+	int num = size - (1 << (level + 1)); //超过的table个数
+	if (level == 0)
+		num = size;
+	vector<int> timetable;
+	for (int i = 0; i < size; i++)
+	{
+		timetable.push_back(buffer[level][i].header.timeStamp);
+	}
 
-		// sort函数将时间戳从小到大排序，然后选取num个最小的去参与排序
-		sort(timetable.begin(), timetable.end());
-		for (int i = 0; i < num; i++)
+	// sort函数将时间戳从小到大排序，然后选取num个最小的去参与排序
+	sort(timetable.begin(), timetable.end());
+	for (int i = 0; i < num; i++)
+	{
+		int temptime = timetable[i];
+		for (int j = 0; j < size - i; j++)
 		{
-			int temptime = timetable[i];
-			for (int j = 0; j < size - i; j++)
+			if (buffer[level][j].header.timeStamp == temptime)
 			{
-				if (buffer[level][j].header.timeStamp == temptime)
-				{
-					int tempStamp = buffer[level][j].header.timeStamp;
-					if (tempStamp > maxStamp)
-						maxStamp = tempStamp;
-                    table2compact.push_back(buffer[level][j]);//按照时间戳从小到大排序
-					buffer[level][j].toKV(&tobecompact, level, tempStamp);
-					buffer[level][j].getscale(tempscale);
-					scale.push_back(tempscale);
-					buffer[level].erase(buffer[level].begin() + j);
-					break;
-				}
+				int tempStamp = buffer[level][j].header.timeStamp;
+				if (tempStamp > maxStamp)
+					maxStamp = tempStamp;
+				buffer[level][j].addData();
+				tobecompact.push_back(buffer[level][j]); //按照时间戳从小到大排序
+				buffer[level][j].getscale(tempscale);
+				scale.push_back(tempscale);
+				buffer[level].erase(buffer[level].begin() + j);
+				break;
 			}
 		}
-        vector<int>().swap(timetable);
+	}
+	vector<int>().swap(timetable);
 
 	//找重叠(不是最大一层)
 	if (level != maxlevel)
 	{
 		int nextlevel = level + 1;
 		int scalesize = scale.size();
-		for (auto it = buffer[nextlevel].begin(); it != buffer[nextlevel].end();)
+		for (auto it = buffer[nextlevel].begin(); it != buffer[nextlevel].end(); )
 		{
 			int max = it->header.maxkey;
 			int min = it->header.minkey;
 			bool iserased = false;
 			for (int j = 0; j < scalesize; j++)
 			{
-				if (!(max < scale[j].first && min > scale[j].second))
+				if (!(max < scale[j].first || min > scale[j].second))
 				{
 					int tempStamp = it->header.timeStamp;
 					if (tempStamp > maxStamp)
 						maxStamp = tempStamp;
 
-					it->toKV(&tobecompact, nextlevel, tempStamp);
+					it->addData();
+					tobecompact.push_back(*it);
 					it = buffer[level].erase(it);
 					iserased = true;
 					break;
 				}
 			}
-			if (iserased)
+			if (!iserased)
 				it++;
 		}
 		vector<Range>().swap(scale);
@@ -169,49 +159,45 @@ void KVStore::compactLevel(int level)
 		maxlevel++;
 		vector<SSTable> newOne;
 		buffer.push_back(newOne);
-        vector<SSTable>().swap(newOne);
+	}
+
+	for (auto it = tobecompact.begin(); it != tobecompact.end(); it++)
+	{
+		string path = "./data/level-" + to_string(it->level) + "/" + to_string(it->header.timeStamp) + "-" + to_string(it->header.kvnumber) + ".sst";
+		rmfile(path.c_str());
 	}
 
 	//对tobecompact保存的SStable中的key值进行归并排序
-	mergeSort(tobecompact, 0, tobecompact.size());
+	mergeSort(tobecompact);
 
 	//按照2MB划分
-	for (auto it = tobecompact.begin(); it != tobecompact.end(); it++)
+	list<KV> *table = tobecompact[0].DATA;
+
+	while (!table->empty())
 	{
 		int length = 0;
-		list<pair<uint64_t, std::string>> table;
-		while (length <= 2086800 && it != tobecompact.end())
+		list<KV> temp;
+		while (length <= 2086800 && !table->empty())
 		{
-			auto next = it + 1;
-			while ((next->key == it->key) && (next != tobecompact.end()))
-			{
-				if (next->ts < it->ts)
-				{
-					swap(*it, *next);
-				}
-				it++;
-				next++;
-			}
 			//考虑最大层删去结点
 			if (level == maxlevel)
 			{
-				if (it->val == "~DELETED~")
-					it++;
+				if (table->front().second == "~DELETED~")
+					table->pop_front();
 				continue;
 			}
-			//循环结束时it保存的即为去除了重复并要保存到table当中的KV
-			length += 12 + sizeof(it->val);
-			pair<uint64_t, std::string> temp(it->key, it->val);
-			table.push_back(temp);
-			it++;
+			length += 12 + sizeof(table->front().second);
+			temp.push_back(table->front());
+			table->pop_front();
 		}
-		SSTable newSSTable(table);
+		SSTable newSSTable(temp);
 		newSSTable.header.timeStamp = maxStamp;
+		newSSTable.level = level+1;
 		//不用判断直接一股脑放了下次再取了来合并
-		buffer[level + 1].push_back(table);
+		buffer[level + 1].push_back(newSSTable);
 		string dirpath = "./data/level-" + to_string(level + 1);
-		string sspath = to_string(maxStamp) + ".sst";
-		newSSTable.mkFile(sspath, dirpath, table);
+		string sspath = to_string(maxStamp) +"-"+to_string(newSSTable.header.kvnumber)+ ".sst";
+		newSSTable.mkFile(sspath, dirpath, temp);
 	}
 }
 
@@ -294,7 +280,7 @@ void KVStore::reset()
 		}
 		utils::rmdir(dirpath.c_str());
 	}
-    vector<string>().swap(ret);
+	vector<string>().swap(ret);
 }
 
 /**
@@ -312,48 +298,80 @@ void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, s
 		heap.insert(tempkey);
 }
 
-void mergeSort(vector<KV> &array, int l, int r)
+void mergeSort(vector<SSTable> &array)
 {
-	if (l >= r)
+	int size = array.size();
+	if (size == 1)
 		return;
-	int mid = (l + r) / 2;
-	mergeSort(array, l, mid);
-	mergeSort(array, mid + 1, r);
-	merge(array, l, mid, r);
-    cout<<l<<" "<<r<<endl;
+	int group = size / 2;
+	vector<SSTable> next;
+	for (int i = 0; i < group; i++)
+	{
+		next.push_back(merge(array[i * 2], array[i * 2 + 1]));
+	}
+    if(group*2<size)
+        next.push_back(array[size-1]);
+	mergeSort(next);
+	array = next;
 }
 
-void merge(vector<KV> &arr, int l, int mid, int r)
+SSTable merge(SSTable &table1, SSTable &table2)
 {
-	vector<KV> temp = arr;
-	int left = l;
-	int right = mid + 1;
-	int index = l;
-	while (left <= mid && right <= r)
+	SSTable ret;
+	//单独判断两个SSTable之间有无交集，没有直接合并带走
+	if (table1.header.maxkey < table2.header.minkey)
 	{
-		if (temp[left].key < temp[right].key)
+		ret.DATA = table1.DATA;
+		while (!table2.DATA->empty())
 		{
-			arr[index] = temp[left];
-			left++;
-			index++;
+			ret.DATA->push_back(table2.DATA->front());
+			table2.DATA->pop_front();
+		}
+		return ret;
+	}
+	if (table1.header.minkey > table2.header.maxkey)
+	{
+		ret.DATA = table2.DATA;
+		while (!table1.DATA->empty())
+		{
+			ret.DATA->push_back(table1.DATA->front());
+			table1.DATA->pop_front();
+		}
+		return ret;
+	}
+	//数据存在重叠则归并排序
+	list<KV> *a = table1.DATA;
+	list<KV> *b = table2.DATA;
+	if (table1.header.timeStamp < table2.header.timeStamp)
+		swap(table1, table2);
+	while (!a->empty() && !b->empty())
+	{
+		if (a->front().first < b->front().first)
+		{
+			ret.DATA->push_back(a->front());
+			a->pop_front();
+		}
+		else if (a->front().first > b->front().first)
+		{
+			ret.DATA->push_back(b->front());
+			b->pop_front();
 		}
 		else
 		{
-			arr[index] = temp[right];
-			right++;
-			index++;
+			ret.DATA->push_back(a->front());
+			a->pop_front();
+			b->pop_front();
 		}
 	}
-	while (left <= mid)
+	while (!a->empty())
 	{
-		arr[index] = temp[left];
-		left++;
-		index++;
+		ret.DATA->push_back(a->front());
+		a->pop_front();
 	}
-	while (right <= r)
+	while (!b->empty())
 	{
-		arr[index] = temp[right];
-		right++;
-		index++;
+		ret.DATA->push_back(b->front());
+		b->pop_front();
 	}
+	return ret;
 }

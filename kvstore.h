@@ -6,18 +6,8 @@
 #include "SSTable.h"
 
 typedef std::pair<uint64_t, uint64_t> Range;
-// // typedef std::pair<uint64_t,string> KV;
-// #ifndef STRUCT_KV
-// #define STRUCT_KV 
-// typedef struct KV{
-// 	uint64_t key;
-// 	string val;
-// 	int ts;
-
-// 	KV(uint64_t _key,string _val,int _ts):key(_key),val(_val),ts(_ts){}
-//     KV(){}
-// };
-// #endif
+void mergeSort(vector<SSTable> &array);
+SSTable merge(SSTable &table1, SSTable &table2);
 
 class KVStore : public KVStoreAPI
 {
