@@ -54,9 +54,9 @@ private:
 		std::list<std::pair<uint64_t, std::string> > list_ans;
 		std::list<std::pair<uint64_t, std::string> > list_stu;
 		for (i = 0; i < max; ++i) {
-			store.put(i, std::string(i+1, 's'));
+ 			store.put(i, std::string(i+1, 's'));
 		}
-		
+
 		for (i = 0; i < max / 2; ++i) {
 			list_ans.emplace_back(std::make_pair(i, std::string(i+1, 's')));
 		}

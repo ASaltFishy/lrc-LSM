@@ -6,8 +6,12 @@
 #include "SSTable.h"
 
 typedef std::pair<uint64_t, uint64_t> Range;
+//typedef pair<list<KV>,uint64_t> SCAN_UNIT;
+void scanMergeSort(vector<SSTable*> &array);
+SSTable* scanMerge(SSTable &table1, SSTable &table2);
 void mergeSort(vector<SSTable> &array);
 SSTable merge(SSTable &table1, SSTable &table2);
+
 
 class KVStore : public KVStoreAPI
 {
@@ -33,8 +37,5 @@ public:
 
 	void scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, std::string>> &list) override;
 };
-//merge sort
-void mergeSort(vector<KV> &array,int l,int r);
-void merge(vector<KV> &arr,int l,int mid,int r);
 
 #endif

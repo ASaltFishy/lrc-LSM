@@ -51,6 +51,7 @@ public:
     bool is_in(uint64_t key);
     void getscale(Range &scale);
     void addData();
+    bool addScanData(uint64_t key1, uint64_t key2);
 };
 
 #endif

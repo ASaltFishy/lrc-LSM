@@ -15,12 +15,14 @@ memtable::memtable()
 memtable::~memtable()
     {
         extern int time_stamp;
-        list<pair<uint64_t, std::string>> list;
-        toSSTable(list);
-		SSTable newSSTable(list);
-        string sspath = to_string(time_stamp) + ".sst";
-        string dirpath = "./data/level-0";
-		newSSTable.mkFile(sspath,dirpath,list);
+        if(head!=NULL){
+            list<pair<uint64_t, std::string>> list;
+            toSSTable(list);
+            SSTable newSSTable(list);
+            string sspath = to_string(time_stamp)+"-"+ to_string(newSSTable.header.kvnumber) + ".sst";
+            string dirpath = "./data/level-0";
+            newSSTable.mkFile(sspath,dirpath,list);
+        }
         //这里暂时不合并了，下次加载之后随便插入一个数据便可发现问题然后自动合并
         SKNode *n1 = head;
         SKNode *n2;
@@ -95,7 +97,6 @@ void memtable::Insert(uint64_t key, const string &value)
 
 string memtable::Search(uint64_t key)
 {
-    // TODO
     SKNode *temp = head;
     for (int i = MAX_LEVEL - 1; i >= 0; i--)
     {
@@ -108,7 +109,7 @@ string memtable::Search(uint64_t key)
     temp = temp->forwards[0];
 
     // if the key is the same,return the string
-    if (temp->key == key && temp->val!="~DELETED~")
+    if (temp->key == key)
     {
         return temp->val;
     }

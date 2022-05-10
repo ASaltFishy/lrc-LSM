@@ -35,7 +35,8 @@ KVStore::KVStore(const std::string &dir) : KVStoreAPI(dir)
 		dirpath = "./data/level-" + to_string(curlevel);
 	}
 	if (buffer.empty()){
-        buffer.emplace_back();
+        vector<SSTable> temp;
+        buffer.push_back(temp);
     }
 	else
 	{
@@ -113,7 +114,7 @@ void KVStore::compactLevel(int level)
 				int tempStamp = buffer[level][j].header.timeStamp;
 				if (tempStamp > maxStamp)
 					maxStamp = tempStamp;
-				buffer[level][j].addData();
+				buffer[level][j].addData();//vector是浅拷贝 data数据不会丢失
 				tobecompact.push_back(buffer[level][j]); //按照时间戳从小到大排序
 				buffer[level][j].getscale(tempscale);
 				scale.push_back(tempscale);
@@ -144,7 +145,7 @@ void KVStore::compactLevel(int level)
 
 					it->addData();
 					tobecompact.push_back(*it);
-					it = buffer[level].erase(it);
+					it = buffer[nextlevel].erase(it);
 					iserased = true;
 					break;
 				}
@@ -157,8 +158,7 @@ void KVStore::compactLevel(int level)
 	else
 	{
 		maxlevel++;
-		vector<SSTable> newOne;
-		buffer.push_back(newOne);
+		buffer.emplace_back();
 	}
 
 	for (auto it = tobecompact.begin(); it != tobecompact.end(); it++)
@@ -167,6 +167,14 @@ void KVStore::compactLevel(int level)
 		rmfile(path.c_str());
 	}
 
+    //归并排序前将sstable按照时间戳排序
+    int tbcsize = tobecompact.size();
+    for(int i=0;i<tbcsize;i++){
+        for(int j=0;j<tbcsize-1-i;j++){
+            if(tobecompact[j].header.timeStamp<tobecompact[j+1].header.timeStamp)
+                swap(tobecompact[j],tobecompact[j+1]);
+        }
+    }
 	//对tobecompact保存的SStable中的key值进行归并排序
 	mergeSort(tobecompact);
 
@@ -180,11 +188,13 @@ void KVStore::compactLevel(int level)
 		while (length <= 2086800 && !table->empty())
 		{
 			//考虑最大层删去结点
-			if (level == maxlevel)
+			if (level == maxlevel-1)
 			{
 				if (table->front().second == "~DELETED~")
-					table->pop_front();
-				continue;
+                {
+                    table->pop_front();
+                    continue;
+                }
 			}
 			length += 12 + sizeof(table->front().second);
 			temp.push_back(table->front());
@@ -193,7 +203,6 @@ void KVStore::compactLevel(int level)
 		SSTable newSSTable(temp);
 		newSSTable.header.timeStamp = maxStamp;
 		newSSTable.level = level+1;
-		//不用判断直接一股脑放了下次再取了来合并
 		buffer[level + 1].push_back(newSSTable);
 		string dirpath = "./data/level-" + to_string(level + 1);
 		string sspath = to_string(maxStamp) +"-"+to_string(newSSTable.header.kvnumber)+ ".sst";
@@ -242,21 +251,10 @@ std::string KVStore::get(uint64_t key)
  */
 bool KVStore::del(uint64_t key)
 {
-	if (KVStore::mtable.Delete(key) == true)
-		return true;
-	int size = buffer.size();
-	for (int i = 0; i <= maxlevel; i++)
-	{
-		for (int j = 0; j < buffer[i].size(); j++)
-		{
-			if (buffer[i][j].is_in(key))
-			{
-				mtable.Insert(key, "~DELETED~");
-				return true;
-			}
-		}
-	}
-	return false;
+    string result = get(key);
+    if(result == "")return false;
+    put(key,"~DELETED~");
+    return true;
 }
 
 /**
@@ -267,20 +265,18 @@ void KVStore::reset()
 {
 	KVStore::mtable.reset();
 	vector<vector<SSTable>>().swap(buffer);
+    buffer.emplace_back();
 	vector<string> ret;
-	for (int j = 0; j <= maxlevel; j++)
-	{
-		string dirpath = "./data/level-" + to_string(j);
-		string filepath = "";
-		utils::scanDir(dirpath, ret);
-		for (int i = 0; i < ret.size(); i++)
-		{
-			filepath = dirpath + "/" + ret[i];
-			utils::rmfile(filepath.c_str());
-		}
-		utils::rmdir(dirpath.c_str());
-	}
-	vector<string>().swap(ret);
+	for (int j = 0; j <= maxlevel; j++) {
+        string dirpath = "./data/level-" + to_string(j);
+        string filepath = "";
+        utils::scanDir(dirpath, ret);
+        for (int i = 0; i < ret.size(); i++) {
+            filepath = dirpath + "/" + ret[i];
+            utils::rmfile(filepath.c_str());
+        }
+        utils::rmdir(dirpath.c_str());
+    }
 }
 
 /**
@@ -290,12 +286,96 @@ void KVStore::reset()
  */
 void KVStore::scan(uint64_t key1, uint64_t key2, std::list<std::pair<uint64_t, std::string>> &list)
 {
-	//使用堆排序和同时管理多个指针的方式
-	MinHeap heap;
-	uint64_t tempkey;
-	tempkey = mtable.Scan(key1, key2);
-	if (tempkey)
-		heap.insert(tempkey);
+    vector<SSTable> tobescan;
+    //用于储存参加扫的list指针
+    std::list<KV> mem;
+    mtable.toSSTable(mem);
+    if(!(mem.front().first>key2 || mem.back().first<key1)){
+        while(mem.front().first<key1){
+            mem.pop_front();
+        }
+        while(mem.back().first>key2){
+            mem.pop_back();
+        }
+        SSTable memTable(mem);
+        memTable.DATA = &mem;
+        memTable.level = 0;
+        tobescan.push_back(memTable);
+    }
+    //第零层每一个sstable都要配个指针
+    for(int i=0;i<buffer[0].size();i++){
+        if(buffer[0][i].addScanData(key1,key2)){
+            tobescan.push_back(buffer[0][i]);
+        }
+    }
+    for(int i=1;i<=maxlevel;i++){
+        for(int j=0;j<buffer[i].size();j++){
+            if(buffer[i][j].addScanData(key1,key2)){
+                tobescan.push_back(buffer[i][j]);
+            }
+        }
+    }
+
+    int tbssize = tobescan.size();
+    for(int i=0;i<tbssize;i++){
+        for(int j=0;j<tbssize-i-1;j++){
+            if(tobescan[j].header.timeStamp<tobescan[j+1].header.timeStamp)
+                swap(tobescan[j],tobescan[j+1]);
+        }
+    }
+    //因为SSTable内部有序故采用归并排序(与合并采用的操作相似)
+    mergeSort(tobescan);
+    std::list<KV>* data = tobescan[0].DATA;
+    while(!data->empty()){
+        list.push_back(data->front());
+        data->pop_front();
+    }
+    std::list<KV>().swap(*tobescan[0].DATA);
+//    vector<SSTable*> tobescan;
+//    //用于储存参加扫的list指针
+//    std::list<KV> mem;
+//    SSTable* memTable = NULL;
+//    mtable.toSSTable(mem);
+//    if(!(mem.front().first>key2 || mem.back().first<key1)){
+//        while(mem.front().first<key1){
+//            mem.pop_front();
+//        }
+//        while(mem.back().first>key2){
+//            mem.pop_back();
+//        }
+//        memTable = new SSTable(mem);
+//        memTable->DATA = &mem;
+//        memTable->level = 0;
+//        tobescan.push_back(memTable);
+//    }
+//    //第零层每一个sstable都要配个指针
+//    for(int i=0;i<buffer[0].size();i++){
+//        if(buffer[0][i].addScanData(key1,key2)){
+//            tobescan.push_back(&buffer[0][i]);
+//        }
+//    }
+//    for(int i=1;i<=maxlevel;i++){
+//        for(int j=0;j<buffer[i].size();j++){
+//            if(buffer[i][j].addScanData(key1,key2)){
+//                tobescan.push_back(&buffer[i][j]);
+//            }
+//        }
+//    }
+//
+//    int tbssize = tobescan.size();
+//    for(int i=0;i<tbssize;i++){
+//        for(int j=i;j<tbssize-1;j++){
+//            if(tobescan[j]->header.timeStamp<tobescan[j+1]->header.timeStamp)
+//                swap(tobescan[j],tobescan[j+1]);
+//        }
+//    }
+//    //因为SSTable内部有序故采用归并排序(与合并采用的操作相似)
+//    scanMergeSort(tobescan);
+//    std::list<KV>* data = tobescan[0]->DATA;
+//    while(!data->empty()){
+//        list.push_back(data->front());
+//        data->pop_front();
+//    }
 }
 
 void mergeSort(vector<SSTable> &array)
@@ -317,33 +397,44 @@ void mergeSort(vector<SSTable> &array)
 
 SSTable merge(SSTable &table1, SSTable &table2)
 {
-	SSTable ret;
+    SSTable ret;
+    ret.DATA = new list<KV>;
 	//单独判断两个SSTable之间有无交集，没有直接合并带走
-	if (table1.header.maxkey < table2.header.minkey)
+	if (table1.DATA->back().first < table2.DATA->front().first)
 	{
-		ret.DATA = table1.DATA;
+        while (!table1.DATA->empty())
+        {
+            ret.DATA->push_back(table1.DATA->front());
+            table1.DATA->pop_front();
+        }
 		while (!table2.DATA->empty())
 		{
 			ret.DATA->push_back(table2.DATA->front());
 			table2.DATA->pop_front();
 		}
+        list<KV>().swap(*table1.DATA);
+        list<KV>().swap(*table2.DATA);
 		return ret;
 	}
-	if (table1.header.minkey > table2.header.maxkey)
+	if (table1.DATA->front().first > table2.DATA->back().first)
 	{
-		ret.DATA = table2.DATA;
+        while (!table2.DATA->empty())
+        {
+            ret.DATA->push_back(table2.DATA->front());
+            table2.DATA->pop_front();
+        }
 		while (!table1.DATA->empty())
 		{
 			ret.DATA->push_back(table1.DATA->front());
 			table1.DATA->pop_front();
 		}
+        list<KV>().swap(*table1.DATA);
+        list<KV>().swap(*table2.DATA);
 		return ret;
 	}
 	//数据存在重叠则归并排序
 	list<KV> *a = table1.DATA;
 	list<KV> *b = table2.DATA;
-	if (table1.header.timeStamp < table2.header.timeStamp)
-		swap(table1, table2);
 	while (!a->empty() && !b->empty())
 	{
 		if (a->front().first < b->front().first)
@@ -373,5 +464,96 @@ SSTable merge(SSTable &table1, SSTable &table2)
 		ret.DATA->push_back(b->front());
 		b->pop_front();
 	}
+    list<KV>().swap(*table1.DATA);
+    list<KV>().swap(*table2.DATA);
 	return ret;
+}
+
+void scanMergeSort(vector<SSTable*> &array)
+{
+    int size = array.size();
+    if (size == 1)
+        return;
+    int group = size / 2;
+    vector<SSTable*> next;
+    for (int i = 0; i < group; i++)
+    {
+        next.push_back(scanMerge(*array[i * 2], *array[i * 2 + 1]));
+    }
+    if(group*2<size)
+        next.push_back(array[size-1]);
+    scanMergeSort(next);
+    array = next;
+}
+
+SSTable* scanMerge(SSTable &table1, SSTable &table2)
+{
+    SSTable* ret = new SSTable;
+    //单独判断两个SSTable之间有无交集，没有直接合并带走
+    if (table1.DATA->back().first < table2.DATA->front().first)
+    {
+        ret->DATA = table1.DATA;
+        while (!table2.DATA->empty())
+        {
+            ret->DATA->push_back(table2.DATA->front());
+            table2.DATA->pop_front();
+        }
+//        delete(table1.DATA);
+//        delete(table2.DATA);
+//        table1.DATA = NULL;
+//        table2.DATA = NULL;
+        return ret;
+    }
+    if (table1.DATA->front().first > table2.DATA->back().first)
+    {
+        ret->DATA = table2.DATA;
+        while (!table1.DATA->empty())
+        {
+            ret->DATA->push_back(table1.DATA->front());
+            table1.DATA->pop_front();
+        }
+//        delete(table1.DATA);
+//        delete(table2.DATA);
+//        table1.DATA = NULL;
+//        table2.DATA = NULL;
+        return ret;
+    }
+    //数据存在重叠则归并排序
+    list<KV> *a = table1.DATA;
+    list<KV> *b = table2.DATA;
+    ret->DATA = new list<KV>;
+    while (!a->empty() && !b->empty())
+    {
+        if (a->front().first < b->front().first)
+        {
+            ret->DATA->push_back(a->front());
+            a->pop_front();
+        }
+        else if (a->front().first > b->front().first)
+        {
+            ret->DATA->push_back(b->front());
+            b->pop_front();
+        }
+        else
+        {
+            ret->DATA->push_back(a->front());
+            a->pop_front();
+            b->pop_front();
+        }
+    }
+    while (!a->empty())
+    {
+        ret->DATA->push_back(a->front());
+        a->pop_front();
+    }
+    while (!b->empty())
+    {
+        ret->DATA->push_back(b->front());
+        b->pop_front();
+    }
+//    delete(table1.DATA);
+//    delete(table2.DATA);
+//    table1.DATA = NULL;
+//    table2.DATA = NULL;
+    return ret;
 }

@@ -8,7 +8,7 @@ include_directories(.)
 add_executable(LSM
         bf.cpp
         bf.h
-        correctness.cc
+        persistence.cc
         kvstore.cc
         kvstore.h
         kvstore_api.h
