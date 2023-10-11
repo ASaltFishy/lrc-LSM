@@ -1,2 +1,2 @@
 # lrc-LSM
-高级数据结构LSM KV大作业
+Course project of SJTU SE2322 *Advanced Data Structures*, 2021 Spring.
